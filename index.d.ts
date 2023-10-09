@@ -43,11 +43,6 @@ declare module "@brooons/react-native-bluetooth-escpos-printer" {
       fonttype?: number; // Text font type. Default 0
     }
 
-    interface IPrintQRCodeOptions {
-      size: number;
-      correctionLevel: number;
-    }
-
     interface IPrintPicOptions {
       width: number;
       left: number;
@@ -103,13 +98,6 @@ declare module "@brooons/react-native-bluetooth-escpos-printer" {
       columnAligns: Array<ALIGN>,
       columnTexts: Array<string>,
       options: IPrintTextOptions
-    ): Promise<void>;
-
-    function printColumnQRCode(
-      columnWidths: Array<number>,
-      columnAligns: Array<ALIGN>,
-      columnTexts: Array<string>,
-      options: IPrintQRCodeOptions
     ): Promise<void>;
 
     function setWidth(width: number): Promise<void>;

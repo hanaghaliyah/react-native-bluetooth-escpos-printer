@@ -162,153 +162,99 @@ public class RNBluetoothEscposPrinterModule extends ReactContextBaseJavaModule
     }
 
     @ReactMethod
-    public void printColumn(ReadableArray columnWidths,ReadableArray columnAligns,ReadableArray columnTexts,
-                            @Nullable ReadableMap options,final Promise promise){
-        if(columnWidths.size()!=columnTexts.size() || columnWidths.size()!=columnAligns.size()){
-            promise.reject("COLUMN_WIDTHS_ALIGNS_AND_TEXTS_NOT_MATCH");
-            return;
-        }
-            int totalLen = 0;
-            for(int i=0;i<columnWidths.size();i++){
-                totalLen+=columnWidths.getInt(i);
+public void printColumn(ReadableArray columnWidths, ReadableArray columnAligns, ReadableArray columnTexts,
+                        @Nullable ReadableMap options, final Promise promise) {
+    if (columnWidths.size() != columnTexts.size() || columnWidths.size() != columnAligns.size()) {
+        promise.reject("COLUMN_WIDTHS_ALIGNS_AND_TEXTS_NOT_MATCH");
+        return;
+    }
+
+    int totalLen = 0;
+    for (int i = 0; i < columnWidths.size(); i++) {
+        totalLen += columnWidths.getInt(i);
+    }
+    int maxLen = deviceWidth / 8;
+    if (totalLen > maxLen) {
+        promise.reject("COLUMN_WIDTHS_TOO_LARGE");
+        return;
+    }
+
+    String encoding = "GBK";
+    int codepage = 0;
+    int widthTimes = 0;
+    int heightTimes = 0;
+    int fontType = 0;
+    if (options != null) {
+        encoding = options.hasKey("encoding") ? options.getString("encoding") : "GBK";
+        codepage = options.hasKey("codepage") ? options.getInt("codepage") : 0;
+        widthTimes = options.hasKey("widthtimes") ? options.getInt("widthtimes") : 0;
+        heightTimes = options.hasKey("heighttimes") ? options.getInt("heighttimes") : 0;
+        fontType = options.hasKey("fonttype") ? options.getInt("fonttype") : 0;
+    }
+    Log.d(TAG, "encoding: " + encoding);
+
+    List<List<Object>> table = new ArrayList<>();
+
+    for (int i = 0; i < columnWidths.size(); i++) {
+        List<Object> columnTextsList = new ArrayList<>();
+        columnTextsList.add(columnTexts.getString(i));
+        if (columnTexts.hasArray(i)) {
+            ReadableArray qrCodeData = columnTexts.getArray(i);
+            if (qrCodeData != null && qrCodeData.size() >= 2) {
+                String qrCodeContent = qrCodeData.getString(0);
+                int qrCodeSize = qrCodeData.getInt(1);
+                columnTextsList.add(qrCodeContent);
+                columnTextsList.add(qrCodeSize);
             }
-            int maxLen = deviceWidth/8;
-            if(totalLen>maxLen){
-                promise.reject("COLUMN_WIDTHS_TOO_LARGE");
+        }
+        table.add(columnTextsList);
+    }
+
+    int maxRowCount = 0;
+    for (List<Object> column : table) {
+        if (column.size() > maxRowCount) {
+            maxRowCount = column.size();
+        }
+    }
+
+    StringBuilder[] rowsToPrint = new StringBuilder[maxRowCount];
+    for (List<Object> column : table) {
+        for (int row = 0; row < maxRowCount; row++) {
+            if (rowsToPrint[row] == null) {
+                rowsToPrint[row] = new StringBuilder();
+            }
+            if (row < column.size()) {
+                if (column.get(row) instanceof String) {
+                    String text = (String) column.get(row);
+                    rowsToPrint[row].append(text);
+                } else if (column.get(row) instanceof Integer) {
+                    // Assume it's QR code data
+                    int qrCodeSize = (int) column.get(row);
+                    if (row > 0 && row < column.size() - 1) {
+                        String qrCodeContent = (String) column.get(row + 1);
+                        printQRCode(qrCodeContent, qrCodeSize, 2, promise); // Adjust error correction level as needed
+                    }
+                }
+            }
+            if (row < maxRowCount - 1) {
+                rowsToPrint[row].append(" "); // Add space to separate columns
+            }
+        }
+    }
+
+    for (int i = 0; i < rowsToPrint.length; i++) {
+        rowsToPrint[i].append("\n\r"); // Wrap line
+        try {
+            if (!sendDataByte(PrinterCommand.POS_Print_Text(rowsToPrint[i].toString(), encoding, codepage, widthTimes, heightTimes, fontType))) {
+                promise.reject("COMMAND_NOT_SEND");
                 return;
             }
-
-        String encoding = "GBK";
-        int codepage = 0;
-        int widthTimes = 0;
-        int heigthTimes = 0;
-        int fonttype = 0;
-        if (options != null) {
-            encoding = options.hasKey("encoding") ? options.getString("encoding") : "GBK";
-            codepage = options.hasKey("codepage") ? options.getInt("codepage") : 0;
-            widthTimes = options.hasKey("widthtimes") ? options.getInt("widthtimes") : 0;
-            heigthTimes = options.hasKey("heigthtimes") ? options.getInt("heigthtimes") : 0;
-            fonttype = options.hasKey("fonttype") ? options.getInt("fonttype") : 0;
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-        Log.d(TAG,"encoding: "+encoding);
-
-        /**
-         * [column1-1,
-         * column1-2,
-         * column1-3 ... column1-n]
-         * ,
-         *  [column2-1,
-         * column2-2,
-         * column2-3 ... column2-n]
-         *
-         * ...
-         *
-         */
-        List<List<String>> table = new ArrayList<List<String>>();
-
-        /**splits the column text to few rows and applies the alignment **/
-        int padding = 1;
-        for(int i=0;i<columnWidths.size();i++){
-            int width =columnWidths.getInt(i)-padding;//1 char padding
-            String text = String.copyValueOf(columnTexts.getString(i).toCharArray());
-            List<ColumnSplitedString> splited = new ArrayList<ColumnSplitedString>();
-            int shorter = 0;
-            int counter = 0;
-            String temp = "";
-            for(int c=0;c<text.length();c++){
-                char ch = text.charAt(c);
-                int l = isChinese(ch)?2:1;
-                if (l==2){
-                    shorter++;
-                }
-                temp=temp+ch;
-
-                if(counter+l<width){
-                   counter = counter+l;
-                }else{
-                    splited.add(new ColumnSplitedString(shorter,temp));
-                    temp = "";
-                    counter=0;
-                    shorter=0;
-                }
-            }
-            if(temp.length()>0) {
-                splited.add(new ColumnSplitedString(shorter,temp));
-            }
-            int align = columnAligns.getInt(i);
-
-            List<String> formated = new ArrayList<String>();
-            for(ColumnSplitedString s: splited){
-                StringBuilder empty = new StringBuilder();
-                for(int w=0;w<(width+padding-s.getShorter());w++){
-                    empty.append(" ");
-                }
-                int startIdx = 0;
-                String ss = s.getStr();
-                if(align == 1 && ss.length()<(width-s.getShorter())){
-                    startIdx = (width-s.getShorter()-ss.length())/2;
-                    if(startIdx+ss.length()>width-s.getShorter()){
-                        startIdx--;
-                    }
-                    if(startIdx<0){
-                        startIdx=0;
-                    }
-                }else if(align==2 && ss.length()<(width-s.getShorter())){
-                    startIdx =width - s.getShorter()-ss.length();
-                }
-                Log.d(TAG,"empty.replace("+startIdx+","+(startIdx+ss.length())+","+ss+")");
-                empty.replace(startIdx,startIdx+ss.length(),ss);
-                formated.add(empty.toString());
-            }
-            table.add(formated);
-
-        }
-
-        /**  try to find the max row count of the table **/
-        int maxRowCount = 0;
-        for(int i=0;i<table.size()/*column count*/;i++){
-            List<String> rows = table.get(i); // row data in current column
-            if(rows.size()>maxRowCount){maxRowCount = rows.size();}// try to find the max row count;
-        }
-
-        /** loop table again to fill the rows **/
-        StringBuilder[] rowsToPrint = new StringBuilder[maxRowCount];
-        for(int column=0;column<table.size()/*column count*/;column++){
-            List<String> rows = table.get(column); // row data in current column
-            for(int row=0;row<maxRowCount;row++){
-                if(rowsToPrint[row]==null){
-                    rowsToPrint[row] = new StringBuilder();
-                }
-                if(row<rows.size()){
-                    //got the row of this column
-                    rowsToPrint[row].append(rows.get(row));
-                }else{
-                    int w =columnWidths.getInt(column);
-                    StringBuilder empty = new StringBuilder();
-                   for(int i=0;i<w;i++){
-                       empty.append(" ");
-                   }
-                    rowsToPrint[row].append(empty.toString());//Append spaces to ensure the format
-                }
-            }
-        }
-
-        /** loops the rows and print **/
-        for(int i=0;i<rowsToPrint.length;i++){
-            rowsToPrint[i].append("\n\r");//wrap line..
-            try {
-//                byte[] toPrint = rowsToPrint[i].toString().getBytes("UTF-8");
-//                String text = new String(toPrint, Charset.forName(encoding));
-                if (!sendDataByte(PrinterCommand.POS_Print_Text(rowsToPrint[i].toString(), encoding, codepage, widthTimes, heigthTimes, fonttype))) {
-                    promise.reject("COMMAND_NOT_SEND");
-                    return;
-                }
-            }catch (Exception e){
-                e.printStackTrace();
-            }
-        }
-        promise.resolve(null);
     }
+    promise.resolve(null);
+}
 
     @ReactMethod
     public void setWidth(int width) {
